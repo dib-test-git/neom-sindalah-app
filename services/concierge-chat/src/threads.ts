@@ -4,13 +4,6 @@
  * Each thread has a monotonic `seq` allocated by the database
  * (Postgres advisory lock per thread). Clients reconcile ordering by `seq`,
  * not by their local arrival time.
- *
- * KNOWN ISSUE — KAN-55 (P1):
- *   On long threads (≈ > 200 messages) reopened from a cold offline cache,
- *   the second page returned by listThreadOrdered() appears in reverse order
- *   to the client. The root cause is below: we paginate DESC for "latest N"
- *   and forget to reverse the page before returning. The fix is tracked on
- *   branch `fix/long-thread-ordering` (PR #3).
  */
 import { Pool } from 'pg';
 import { ulid } from 'ulid';
@@ -25,8 +18,8 @@ export type ChatMessage = {
   bodyTranslated?: string | null;
   lang: 'en' | 'ar';
   postedAt: string;
-  readBy?: string[];           // ← NEW (KAN-39): IDs of users who have read this message
-  reactions?: Reaction[];      // ← NEW (KAN-39): emoji reactions
+  readBy?: string[];
+  reactions?: Reaction[];
 };
 
 export type Reaction = {
@@ -97,8 +90,7 @@ export async function appendToThread(
 
 /**
  * Mark `messageId` as read by `userId`. Returns the updated readBy set.
- * Idempotent: re-marking is a no-op. Used by both client read-receipts
- * and the server's "guest opened thread" event.
+ * Idempotent.
  */
 export async function markRead(
   pool: Pool,
@@ -119,7 +111,7 @@ export async function markRead(
 }
 
 /**
- * Add a reaction. Same user adding the same emoji is a no-op.
+ * Add a reaction.
  */
 export async function addReaction(
   pool: Pool,
@@ -140,13 +132,19 @@ export async function addReaction(
 /**
  * Read a thread in ascending seq order.
  *
- * KAN-55: this function paginates DESC to pull the latest N quickly,
- * then concatenates pages. On long threads the SECOND page is appended
- * without being reversed, so the client receives:
- *   [newest..mid] ++ [mid-1..oldest]   <-- last chunk is in the wrong order
+ * KAN-55 fix: previously this function paginated DESC and concatenated
+ * pages without re-sorting. The first page was reversed in place to
+ * produce ASC, but subsequent pages were appended as-is (still DESC),
+ * so the tail of the result was in reverse order for any thread longer
+ * than PAGE_SIZE messages.
  *
- * The fix on `fix/long-thread-ordering` adds an explicit ascending re-sort
- * across the full result before return.
+ * The fix has two parts:
+ *
+ *   1. Always reverse each page so every page contribution is ASC, then
+ *      prepend (not append) older pages to the head of the buffer.
+ *   2. Final defensive sort by `seq` ASC before return — cheap on
+ *      already-sorted input, robust if pagination behaviour changes
+ *      again in future.
  */
 export async function listThreadOrdered(
   pool: Pool,
@@ -155,9 +153,7 @@ export async function listThreadOrdered(
   const out: ChatMessage[] = [];
   let beforeSeq: number | null = null;
 
-  // Pull all pages, newest first.
-  // BUG: pages are concatenated without normalising order, so once we span
-  //      more than one page the tail of `out` is in DESC order.
+  // Pull all pages, newest first; prepend each (reversed -> ASC) page to `out`.
   // eslint-disable-next-line no-constant-condition
   while (true) {
     const { rows } = await pool.query<ChatMessage>(
@@ -173,17 +169,18 @@ export async function listThreadOrdered(
     );
     if (rows.length === 0) break;
 
-    // First page: reverse so the caller gets ASC.
-    // Subsequent pages: we forget to reverse.  <-- KAN-55
-    if (out.length === 0) {
-      out.push(...rows.reverse());
-    } else {
-      out.push(...rows);
-    }
+    // Each page is DESC; reverse to ASC and prepend so the buffer is
+    // continuously ASC by `seq`.
+    const ascPage = rows.reverse();
+    out.unshift(...ascPage);
 
     if (rows.length < PAGE_SIZE) break;
-    beforeSeq = rows[rows.length - 1].seq;
+    // `rows` was reversed in place, so the oldest seq on this page is now at index 0.
+    beforeSeq = ascPage[0].seq;
   }
 
+  // Defensive final sort. Cheap when already sorted; protects against future
+  // pagination changes regressing the KAN-55 ordering invariant.
+  out.sort((a, b) => a.seq - b.seq);
   return out;
 }
