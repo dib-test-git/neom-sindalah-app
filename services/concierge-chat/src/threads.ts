@@ -25,9 +25,17 @@ export type ChatMessage = {
   bodyTranslated?: string | null;
   lang: 'en' | 'ar';
   postedAt: string;
+  readBy?: string[];           // ← NEW (KAN-39): IDs of users who have read this message
+  reactions?: Reaction[];      // ← NEW (KAN-39): emoji reactions
 };
 
-export type ChatMessageInput = Omit<ChatMessage, 'id' | 'seq' | 'postedAt'>;
+export type Reaction = {
+  emoji: string;
+  userId: string;
+  addedAt: string;
+};
+
+export type ChatMessageInput = Omit<ChatMessage, 'id' | 'seq' | 'postedAt' | 'readBy' | 'reactions'>;
 
 const PAGE_SIZE = 100;
 
@@ -76,6 +84,8 @@ export async function appendToThread(
       bodyTranslated: input.bodyTranslated ?? null,
       lang: input.lang,
       postedAt: rows[0].posted_at,
+      readBy: [],
+      reactions: [],
     };
   } catch (err) {
     await client.query('ROLLBACK');
@@ -83,6 +93,48 @@ export async function appendToThread(
   } finally {
     client.release();
   }
+}
+
+/**
+ * Mark `messageId` as read by `userId`. Returns the updated readBy set.
+ * Idempotent: re-marking is a no-op. Used by both client read-receipts
+ * and the server's "guest opened thread" event.
+ */
+export async function markRead(
+  pool: Pool,
+  messageId: string,
+  userId: string,
+): Promise<string[]> {
+  const { rows } = await pool.query<{ read_by: string[] }>(
+    `UPDATE messages
+        SET read_by = (
+          SELECT array_agg(DISTINCT u)
+            FROM unnest(COALESCE(read_by, ARRAY[]::text[]) || ARRAY[$2::text]) AS u
+        )
+      WHERE id = $1
+      RETURNING read_by`,
+    [messageId, userId],
+  );
+  return rows[0]?.read_by ?? [];
+}
+
+/**
+ * Add a reaction. Same user adding the same emoji is a no-op.
+ */
+export async function addReaction(
+  pool: Pool,
+  messageId: string,
+  emoji: string,
+  userId: string,
+): Promise<void> {
+  await pool.query(
+    `UPDATE messages
+        SET reactions = COALESCE(reactions, '[]'::jsonb) ||
+                        jsonb_build_object('emoji', $2::text, 'userId', $3::text, 'addedAt', now())::jsonb
+      WHERE id = $1
+        AND NOT (reactions @> jsonb_build_array(jsonb_build_object('emoji', $2::text, 'userId', $3::text)))`,
+    [messageId, emoji, userId],
+  );
 }
 
 /**
@@ -111,7 +163,7 @@ export async function listThreadOrdered(
     const { rows } = await pool.query<ChatMessage>(
       `SELECT id, thread_id AS "threadId", parent_id AS "parentId",
               seq, author_role AS "authorRole", body, body_translated AS "bodyTranslated",
-              lang, posted_at AS "postedAt"
+              lang, posted_at AS "postedAt", read_by AS "readBy", reactions
          FROM messages
         WHERE thread_id = $1
           AND ($2::int IS NULL OR seq < $2)
