@@ -1,0 +1,31 @@
+{
+  "name": "vip-audit",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Append-only, hash-chained VIP audit log (KAN-42).",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "lint": "eslint src --ext .ts",
+    "typecheck": "tsc --noEmit",
+    "test": "jest"
+  },
+  "dependencies": {
+    "fastify": "^4.27.0",
+    "pino": "^9.0.0",
+    "pg": "^8.11.5",
+    "ulid": "^2.3.0"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.12",
+    "@types/node": "^20.12.7",
+    "@types/pg": "^8.11.5",
+    "eslint": "^8.57.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.2",
+    "tsx": "^4.7.2",
+    "typescript": "^5.4.5"
+  }
+}
