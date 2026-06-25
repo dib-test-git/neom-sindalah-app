@@ -1,0 +1,69 @@
+name: backend-ci
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'services/**'
+      - '.github/workflows/backend-ci.yml'
+  pull_request:
+    paths:
+      - 'services/**'
+      - '.github/workflows/backend-ci.yml'
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - concierge-chat
+          - opera-integration
+          - marina-availability
+          - vip-audit
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: sindalah
+          POSTGRES_DB: sindalah_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+      - uses: pnpm/action-setup@v3
+        with:
+          version: 9
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Lint
+        run: pnpm --filter ${{ matrix.service }} lint
+      - name: Typecheck
+        run: pnpm --filter ${{ matrix.service }} typecheck
+      - name: Test
+        env:
+          DATABASE_URL: postgres://postgres:sindalah@localhost:5432/sindalah_test
+        run: pnpm --filter ${{ matrix.service }} test -- --ci
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - uses: pnpm/action-setup@v3
+        with:
+          version: 9
+      - run: pnpm install --frozen-lockfile
+      - name: pnpm audit
+        run: pnpm audit --audit-level moderate || true

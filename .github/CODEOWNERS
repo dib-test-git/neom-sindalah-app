@@ -1,0 +1,24 @@
+# Sindalah CODEOWNERS
+# Default owners
+*                               @neom-sindalah-leads
+
+# Guest mobile app
+/apps/guest-mobile/             @neom-mobile @neom-sindalah-leads
+
+# Staff mobile app
+/apps/staff-mobile/             @neom-mobile @neom-sindalah-leads
+
+# Concierge chat (WebSocket + threading)
+/services/concierge-chat/       @neom-sindalah-leads
+
+# Opera PMS integration
+/services/opera-integration/    @neom-sindalah-leads
+
+# Marina availability aggregator
+/services/marina-availability/  @neom-sindalah-leads
+
+# VIP audit trail (compliance-sensitive)
+/services/vip-audit/            @neom-sindalah-leads
+
+# Docs
+/docs/                          @neom-sindalah-leads
